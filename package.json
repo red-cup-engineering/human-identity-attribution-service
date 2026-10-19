@@ -20,5 +20,9 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/human-identity-attribution-service.git"
+  }
 }
