@@ -150,7 +150,7 @@ function requiredContext(ref) {
 }
 function admittedSwitchHistory(value) { if (value !== "disabled" && value !== "opted-in") throw new IdentityAttributionError("invalid switch-history setting"); return value; }
 function httpsUrl(value, label) { let parsed; try { parsed = new URL(value); } catch { throw new IdentityAttributionError(`${label} must be an HTTPS URL`); } if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new IdentityAttributionError(`${label} must be an HTTPS URL`); return parsed.href; }
-function isoInstant(value, label) { if (typeof value !== "string" || !/([zZ]|[+-]\\d\\d:\\d\\d)$/u.test(value) || !Number.isFinite(Date.parse(value))) throw new IdentityAttributionError(`${label} must be an ISO instant with timezone`); return new Date(value).toISOString(); }
+function isoInstant(value, label) { if (typeof value !== "string" || !/([zZ]|[+-]\d\d:\d\d)$/u.test(value) || !Number.isFinite(Date.parse(value))) throw new IdentityAttributionError(`${label} must be an ISO instant with timezone`); return new Date(value).toISOString(); }
 function field(value) {
   const normalized = exactCarrier(value, ["value", "visibility"], "member field");
   requiredText(normalized.value, "field value");
@@ -182,7 +182,7 @@ function freezeTags(tags) {
     if (typeof normalized.prefix !== "string" || typeof normalized.suffix !== "string" ||
         (normalized.prefix === "" && normalized.suffix === ""))
       throw new IdentityAttributionError("a proxy tag needs string prefix and suffix");
-    const key = `${normalized.prefix}\\u0000${normalized.suffix}`;
+    const key = `${normalized.prefix}\u0000${normalized.suffix}`;
     if (seen.has(key)) throw new IdentityAttributionError("duplicate proxy tag");
     seen.add(key);
     return normalized;
