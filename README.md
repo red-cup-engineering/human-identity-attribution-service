@@ -18,6 +18,32 @@ model AI/session personas. `proposeDiscordProxy` returns an inert proposal and
 an attribution receipt; a separate Discord adapter must preserve that boundary
 and complete its own moderation, privacy, idempotency, and rollback checks.
 
+## Explicit identity-source custody
+
+An external account reference is exactly `{ surface: "discord", accountId }`;
+a community context is exactly `{ surface: "discord", communityId }`.
+Both are **reference coordinates**, never Discord SDK request/response objects.
+The source now rejects undeclared, inherited, accessor-backed or symbol-keyed
+fields on these carriers. In particular, `token`, `Authorization`,
+`password` and similar private provider attributes cannot ride in an
+`accountRefs` source, a proxy receipt or portable-system export. The same
+source-bound principle applies to explicit proxy tags (only `prefix` and
+`suffix`) and typed member fields (only `value` and `visibility`).
+Nontext, incomplete and malformed carriers refuse rather than running
+provider-derived property getters. These are **non-networked core**
+validations; `authorizedPurpose: "moderation"` remains a caller's purpose
+claim and does **not** itself authenticate or grant moderation authority.
+Actual Discord adapters must independently authenticate the caller, apply
+message/organization consent, authorize roles, manage the delivery/replay,
+and prevent private record export to unauthorized clients.
+
+The original `npm test` suite now includes
+`test/source-carriers.test.mjs`, covering ordinary import/export and
+moderator behavior alongside nine new adversarial credential, context,
+accessor, prototype and field refusals. This is a meaningful security
+source change, **not** a certified access-control framework, tenant
+installation, actual user effect, or paid customer engagement.
+
 ## Prototype guarantees
 
 - Untagged or ambiguous content remains inert.
