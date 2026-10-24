@@ -9,7 +9,7 @@ export const emptyState = () => Object.freeze({ systems: Object.freeze([]), memb
 export function createSystem(state, input) {
   requiredId(input.id, "system id");
   if (state.systems.some((system) => system.id === input.id)) throw new IdentityAttributionError("system id already exists");
-  if (input.accountRefs.length === 0) throw new IdentityAttributionError("a system needs at least one linked account");
+  if (!Array.isArray(input.accountRefs) || input.accountRefs.length === 0) throw new IdentityAttributionError("a system needs at least one linked account");
   const accountRefs = freezeAccounts(input.accountRefs);
   for (const ref of accountRefs) if (state.systems.some((system) => system.accountRefs.some((other) => sameAccount(other, ref)))) throw new IdentityAttributionError("a linked account already belongs to another system");
   const system = Object.freeze({ id: input.id, accountRefs, ...(input.name === undefined ? {} : { name: field(input.name) }), ...(input.description === undefined ? {} : { description: field(input.description) }), switchHistory: admittedSwitchHistory(input.switchHistory ?? "disabled") });
@@ -28,17 +28,18 @@ export function addContextMask(state, input) {
   requiredId(input.id, "mask id");
   const member = memberOf(state, input.memberId);
   if (state.masks.some((mask) => mask.id === input.id)) throw new IdentityAttributionError("mask id already exists");
-  requiredContext(input.context); requiredText(input.displayName, "display name");
+  const context = requiredContext(input.context); requiredText(input.displayName, "display name");
   const proxyTags = freezeTags(input.proxyTags);
-  const mask = Object.freeze({ id: input.id, memberId: member.id, context: Object.freeze({ ...input.context }), displayName: input.displayName, ...(input.avatarUrl === undefined ? {} : { avatarUrl: httpsUrl(input.avatarUrl, "avatar URL") }), proxyTags, fields: freezeFields(input.fields ?? {}) });
+  const mask = Object.freeze({ id: input.id, memberId: member.id, context, displayName: input.displayName, ...(input.avatarUrl === undefined ? {} : { avatarUrl: httpsUrl(input.avatarUrl, "avatar URL") }), proxyTags, fields: freezeFields(input.fields ?? {}) });
   return Object.freeze({ state: next(state, { masks: [...state.masks, mask] }), mask });
 }
 
 export function parseExplicitProxy(state, input) {
-  requiredAccount(input.account); requiredContext(input.context);
-  const system = state.systems.find((candidate) => candidate.accountRefs.some((account) => sameAccount(account, input.account)));
+  const sourceAccount = requiredAccount(input.account), context = requiredContext(input.context);
+  if (typeof input.content !== "string") throw new IdentityAttributionError("proxy content must be a string");
+  const system = state.systems.find((candidate) => candidate.accountRefs.some((account) => sameAccount(account, sourceAccount)));
   if (system === undefined) return Object.freeze({ kind: "no-match", reason: "account is not linked to a system" });
-  const matches = state.masks.filter((mask) => memberOf(state, mask.memberId).systemId === system.id && sameContext(mask.context, input.context) && mask.proxyTags.some((tag) => wrapped(input.content, tag)));
+  const matches = state.masks.filter((mask) => memberOf(state, mask.memberId).systemId === system.id && sameContext(mask.context, context) && mask.proxyTags.some((tag) => wrapped(input.content, tag)));
   if (matches.length === 0) return Object.freeze({ kind: "no-match", reason: "content does not match an explicit proxy tag" });
   if (matches.length !== 1) return Object.freeze({ kind: "ambiguous", reason: "more than one mask matches the explicit proxy tag" });
   const mask = matches[0];
@@ -54,7 +55,7 @@ export function proposeDiscordProxy(state, input) {
   const parsed = parseExplicitProxy(state, { account: input.sourceAccount, context: input.context, content: input.content });
   if (parsed.kind !== "matched") return parsed;
   const mask = maskOf(state, parsed.maskId), member = memberOf(state, parsed.memberId);
-  const receipt = Object.freeze({ id: input.receiptId, source: Object.freeze({ ...input.sourceAccount }), systemId: member.systemId, memberId: member.id, maskId: mask.id, context: Object.freeze({ ...input.context }), sourceMessageId: input.sourceMessageId, status: "proposed" });
+  const receipt = Object.freeze({ id: input.receiptId, source: requiredAccount(input.sourceAccount), systemId: member.systemId, memberId: member.id, maskId: mask.id, context: requiredContext(input.context), sourceMessageId: input.sourceMessageId, status: "proposed" });
   const proposal = Object.freeze({ kind: "discord-webhook-proposal", content: parsed.body, displayName: mask.displayName, ...(mask.avatarUrl === undefined ? {} : { avatarUrl: mask.avatarUrl }), ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }), attachments: Object.freeze([...(input.attachments ?? [])]) });
   return Object.freeze({ state: next(state, { receipts: [...state.receipts, receipt] }), proposal, receipt });
 }
@@ -82,10 +83,11 @@ export function importSystem(state, record) {
   for (const member of record.members) imported = addMember(imported, member).state;
   for (const mask of record.masks) imported = addContextMask(imported, mask).state;
   for (const receipt of record.receipts) {
-    requiredId(receipt.id, "receipt id"); requiredText(receipt.sourceMessageId, "source message id"); requiredAccount(receipt.source); requiredContext(receipt.context);
+    requiredId(receipt.id, "receipt id"); requiredText(receipt.sourceMessageId, "source message id");
+    const source = requiredAccount(receipt.source), context = requiredContext(receipt.context);
     const member = memberOf(imported, receipt.memberId), mask = maskOf(imported, receipt.maskId);
-    if (receipt.status !== "proposed" || receipt.systemId !== record.system.id || member.systemId !== record.system.id || mask.memberId !== member.id || !sameContext(mask.context, receipt.context) || !record.system.accountRefs.some((account) => sameAccount(account, receipt.source)) || imported.receipts.some((candidate) => candidate.id === receipt.id)) throw new IdentityAttributionError("portable receipt is inconsistent");
-    imported = next(imported, { receipts: [...imported.receipts, Object.freeze({ ...receipt, source: Object.freeze({ ...receipt.source }), context: Object.freeze({ ...receipt.context }) })] });
+    if (receipt.status !== "proposed" || receipt.systemId !== record.system.id || member.systemId !== record.system.id || mask.memberId !== member.id || !sameContext(mask.context, context) || !record.system.accountRefs.some((account) => sameAccount(account, source)) || imported.receipts.some((candidate) => candidate.id === receipt.id)) throw new IdentityAttributionError("portable receipt is inconsistent");
+    imported = next(imported, { receipts: [...imported.receipts, Object.freeze({ ...receipt, source, context })] });
   }
   for (const recordSwitch of record.switches) imported = appendSwitch(imported, recordSwitch).state;
   return Object.freeze({ state: imported, system: systemOf(imported, record.system.id) });
@@ -108,17 +110,84 @@ export function appendSwitch(state, input) {
 }
 
 function next(state, patch) { return Object.freeze({ systems: Object.freeze([...(patch.systems ?? state.systems)]), members: Object.freeze([...(patch.members ?? state.members)]), masks: Object.freeze([...(patch.masks ?? state.masks)]), receipts: Object.freeze([...(patch.receipts ?? state.receipts)]), switches: Object.freeze([...(patch.switches ?? state.switches)]) }); }
-function requiredText(value, label) { if (value.trim() === "") throw new IdentityAttributionError(`${label} is required`); }
+// Identity/attribution carriers are privacy boundaries, not bags for
+// provider SDK responses. Admit exactly the public reference coordinates;
+// reject extra fields (including accidental API keys), inherited and
+// accessor-supplied data before it reaches any receipt/export.
+function exactCarrier(value, names, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(value)))
+    throw new IdentityAttributionError(`${label} needs a plain explicit carrier`);
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== names.length || keys.some(key =>
+      typeof key !== "string" || !names.includes(key)))
+    throw new IdentityAttributionError(`${label} has undeclared or missing fields`);
+  const values = {};
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor || !Object.hasOwn(descriptor, "value") || !descriptor.enumerable)
+      throw new IdentityAttributionError(`${label} fields must be own data properties`);
+    values[name] = descriptor.value;
+  }
+  return Object.freeze(values);
+}
+function requiredText(value, label) {
+  if (typeof value !== "string" || value.trim() === "")
+    throw new IdentityAttributionError(`${label} is required`);
+}
 function requiredId(value, label) { requiredText(value, label); if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)) throw new IdentityAttributionError(`${label} must be a lowercase hyphenated identifier`); }
-function requiredAccount(ref) { if (ref.surface !== "discord") throw new IdentityAttributionError("unsupported account surface"); requiredText(ref.accountId, "account id"); }
-function requiredContext(context) { if (context.surface !== "discord") throw new IdentityAttributionError("unsupported context surface"); requiredText(context.communityId, "community id"); }
+function requiredAccount(ref) {
+  const account = exactCarrier(ref, ["surface", "accountId"], "account reference");
+  if (account.surface !== "discord") throw new IdentityAttributionError("unsupported account surface");
+  requiredText(account.accountId, "account id");
+  return account;
+}
+function requiredContext(ref) {
+  const context = exactCarrier(ref, ["surface", "communityId"], "context reference");
+  if (context.surface !== "discord") throw new IdentityAttributionError("unsupported context surface");
+  requiredText(context.communityId, "community id");
+  return context;
+}
 function admittedSwitchHistory(value) { if (value !== "disabled" && value !== "opted-in") throw new IdentityAttributionError("invalid switch-history setting"); return value; }
 function httpsUrl(value, label) { let parsed; try { parsed = new URL(value); } catch { throw new IdentityAttributionError(`${label} must be an HTTPS URL`); } if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new IdentityAttributionError(`${label} must be an HTTPS URL`); return parsed.href; }
-function isoInstant(value, label) { if (!/([zZ]|[+-]\d\d:\d\d)$/u.test(value) || !Number.isFinite(Date.parse(value))) throw new IdentityAttributionError(`${label} must be an ISO instant with timezone`); return new Date(value).toISOString(); }
-function field(value) { requiredText(value.value, "field value"); if (!["public", "system", "private"].includes(value.visibility)) throw new IdentityAttributionError("invalid field visibility"); return Object.freeze({ ...value }); }
-function freezeFields(values) { return Object.freeze(Object.fromEntries(Object.entries(values).map(([key, value]) => { requiredId(key, "field key"); return [key, field(value)]; }))); }
-function freezeAccounts(refs) { const seen = new Set(); return Object.freeze(refs.map((ref) => { requiredAccount(ref); const key = `${ref.surface}:${ref.accountId}`; if (seen.has(key)) throw new IdentityAttributionError("duplicate account ref"); seen.add(key); return Object.freeze({ ...ref }); })); }
-function freezeTags(tags) { if (tags.length === 0) throw new IdentityAttributionError("a mask needs at least one explicit proxy tag"); const seen = new Set(); return Object.freeze(tags.map((tag) => { if (tag.prefix === "" && tag.suffix === "") throw new IdentityAttributionError("a proxy tag needs a prefix or suffix"); const key = `${tag.prefix}\u0000${tag.suffix}`; if (seen.has(key)) throw new IdentityAttributionError("duplicate proxy tag"); seen.add(key); return Object.freeze({ ...tag }); })); }
+function isoInstant(value, label) { if (typeof value !== "string" || !/([zZ]|[+-]\\d\\d:\\d\\d)$/u.test(value) || !Number.isFinite(Date.parse(value))) throw new IdentityAttributionError(`${label} must be an ISO instant with timezone`); return new Date(value).toISOString(); }
+function field(value) {
+  const normalized = exactCarrier(value, ["value", "visibility"], "member field");
+  requiredText(normalized.value, "field value");
+  if (!["public", "system", "private"].includes(normalized.visibility)) throw new IdentityAttributionError("invalid field visibility");
+  return normalized;
+}
+function freezeFields(values) {
+  if (!values || typeof values !== "object" || Array.isArray(values))
+    throw new IdentityAttributionError("member fields must be an object");
+  return Object.freeze(Object.fromEntries(Object.entries(values).map(([key, value]) => { requiredId(key, "field key"); return [key, field(value)]; })));
+}
+function freezeAccounts(refs) {
+  if (!Array.isArray(refs)) throw new IdentityAttributionError("account refs must be a list");
+  const seen = new Set();
+  return Object.freeze(refs.map(ref => {
+    const normalized = requiredAccount(ref);
+    const key = `${normalized.surface}:${normalized.accountId}`;
+    if (seen.has(key)) throw new IdentityAttributionError("duplicate account ref");
+    seen.add(key);
+    return normalized;
+  }));
+}
+function freezeTags(tags) {
+  if (!Array.isArray(tags) || tags.length === 0)
+    throw new IdentityAttributionError("a mask needs at least one explicit proxy tag");
+  const seen = new Set();
+  return Object.freeze(tags.map(tag => {
+    const normalized = exactCarrier(tag, ["prefix", "suffix"], "proxy tag");
+    if (typeof normalized.prefix !== "string" || typeof normalized.suffix !== "string" ||
+        (normalized.prefix === "" && normalized.suffix === ""))
+      throw new IdentityAttributionError("a proxy tag needs string prefix and suffix");
+    const key = `${normalized.prefix}\\u0000${normalized.suffix}`;
+    if (seen.has(key)) throw new IdentityAttributionError("duplicate proxy tag");
+    seen.add(key);
+    return normalized;
+  }));
+}
 function systemOf(state, id) { const found = state.systems.find((system) => system.id === id); if (found === undefined) throw new IdentityAttributionError("system does not exist"); return found; }
 function memberOf(state, id) { const found = state.members.find((member) => member.id === id); if (found === undefined) throw new IdentityAttributionError("member does not exist"); return found; }
 function maskOf(state, id) { const found = state.masks.find((mask) => mask.id === id); if (found === undefined) throw new IdentityAttributionError("mask does not exist"); return found; }
