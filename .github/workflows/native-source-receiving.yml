@@ -1,0 +1,59 @@
+name: Native identity source and installed-package receiving
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'package.json'
+      - '.github/workflows/native-source-receiving.yml'
+  push:
+    branches:
+      - main
+      - fix/identity-attribution-strict-source-carriers-20261023
+permissions:
+  contents: read
+jobs:
+  native-source-and-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Read exact original source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Native supported Node 22
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Execute native original test suite, not an isolated source shim
+        run: |
+          node --check src/identity-attribution.mjs
+          node --check src/index.mjs
+          node --check test/identity-attribution.test.mjs
+          node --check test/source-carriers.test.mjs
+          npm test
+      - name: Receive exact packed consumer from an actual local tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_dir="$(mktemp -d)"
+          consumer="$(mktemp -d)"
+          npm pack --offline --ignore-scripts --pack-destination "$archive_dir" --silent
+          shopt -s nullglob
+          packages=("$archive_dir"/*.tgz)
+          [[ ${#packages[@]} -eq 1 ]]
+          npm install --offline --ignore-scripts --no-audit --no-fund --prefix "$consumer" "${packages[0]}"
+          cd "$consumer"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {emptyState,createSystem,exportSystem,IdentityAttributionError} from '@red-cup-engineering/human-identity-attribution-service';
+          const original={surface:'discord',accountId:'source-account'};
+          const result=createSystem(emptyState(),{id:'original',accountRefs:[original]});
+          assert.deepEqual(exportSystem(result.state,'original').system.accountRefs,[original]);
+          assert.throws(()=>createSystem(emptyState(),{
+            id:'refuse-private-source',accountRefs:[{...original,accessToken:'INERT_SECRET_MARKER'}],
+          }),IdentityAttributionError);
+          assert.equal(JSON.stringify(exportSystem(result.state,'original')).includes('INERT_SECRET_MARKER'),false);
+          console.log('Installed exact source export accepted ordinary account and refused leaked credential field');
+          NODE
